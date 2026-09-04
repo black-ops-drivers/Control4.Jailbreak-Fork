@@ -847,6 +847,11 @@ namespace Garry.Control4.Jailbreak.UI
         /// Connects an SSH/SCP client, retrying the initial connect a few times with a short
         /// delay. ConnectionInfo.RetryAttempts only covers SSH channel-open retries, not the
         /// initial TCP/handshake, which is the part that fails on a flaky network.
+        ///
+        /// Only genuine network transients (socket errors, timeouts) are retried. Auth and
+        /// protocol failures — bad credentials, "too many authentication failures" — are
+        /// deterministic, so we fail fast and let the caller's SSH-restore path run instead
+        /// of burning the server's auth-attempt budget on identical retries.
         /// </summary>
         private static void ConnectWithRetries(BaseClient client, LogWindow log, string label, int maxAttempts = 3)
         {
@@ -859,7 +864,7 @@ namespace Garry.Control4.Jailbreak.UI
                 }
                 catch (Exception ex)
                 {
-                    if (attempt >= maxAttempts)
+                    if (attempt >= maxAttempts || !IsTransientConnectFailure(ex))
                         throw;
 
                     log.WriteWarning(
@@ -867,6 +872,17 @@ namespace Garry.Control4.Jailbreak.UI
                     System.Threading.Thread.Sleep(TimeSpan.FromSeconds(2));
                 }
             }
+        }
+
+        private static bool IsTransientConnectFailure(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is System.Net.Sockets.SocketException) return true;
+                if (e is SshOperationTimeoutException) return true;
+            }
+
+            return false;
         }
 
         /// <summary>
